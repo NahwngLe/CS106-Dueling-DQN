@@ -13,35 +13,50 @@ from tensorflow.keras.utils import plot_model
 from tensorflow.keras.models import load_model
 
 class TrainModel:
-    def __init__(self, num_layers, width, batch_size, learning_rate, input_dim, output_dim): 
+    def __init__(self, num_layers, width, batch_size, learning_rate, input_dim, output_dim):
         self._input_dim = input_dim
         self._output_dim = output_dim
-        self._batch_size = batch_size # Get batch sample to train
+        self._batch_size = batch_size
         self._learning_rate = learning_rate
         self._model = self._build_model(num_layers, width)
-    
-    def _build_model(self,num_layers, width):
+        self._target_model = self._build_model(num_layers, width)  # Thêm mạng mục tiêu
+        self._update_target_model()  # Đồng bộ hóa trọng số ban đầu
+
+    def _build_model(self, num_layers, width):
         inputs = keras.Input(shape=(self._input_dim,))
 
+        # Các lớp Dense cho phần chung
         x = layers.Dense(512, activation='relu')(inputs)
         x = layers.Dense(256, activation='relu')(x)
-        x = layers.Dense(64, activation='relu')(x)
-        
-        outputs = layers.Dense(self._output_dim, activation='linear')(x)
 
-        model = keras.Model(inputs = inputs, outputs = outputs, name="my_model")
-        model.compile(loss=losses.MeanSquaredError(),  optimizer=Adam(learning_rate=self._learning_rate))
+        # Phần giá trị trạng thái
+        state_value = layers.Dense(64, activation='relu')(x)
+        state_value = layers.Dense(1, activation='linear')(state_value)
+
+        # Phần lợi thế hành động
+        advantage = layers.Dense(64, activation='relu')(x)
+        advantage = layers.Dense(self._output_dim, activation='linear')(advantage)
+
+        # Kết hợp giá trị trạng thái và lợi thế hành động
+        outputs = state_value + (advantage - tf.reduce_mean(advantage, axis=1, keepdims=True))
+
+        model = keras.Model(inputs=inputs, outputs=outputs, name="dueling_dqn_model")
+        model.compile(loss=losses.MeanSquaredError(), optimizer=Adam(learning_rate=self._learning_rate))
         return model
-    
+
+    def _update_target_model(self):
+        self._target_model.set_weights(self._model.get_weights())
+
     def predict_one(self, state):
         state = np.reshape(state, [1, self._input_dim])
-        # print("state", state)
         return self._model.predict(state)
-    
-    def predict_batch(self,states):
-        # print("stats", states)
+
+    def predict_batch(self, states):
         return self._model.predict(states)
-    
+
+    def target_predict_batch(self, states):
+        return self._target_model.predict(states)
+
     def train_batch(self, states, q_sa):
         self._model.fit(states, q_sa, epochs=1, verbose=0)
 
@@ -49,20 +64,18 @@ class TrainModel:
         self._model.save(os.path.join(path, 'trained_model.keras'))
         plot_model(self._model, to_file=os.path.join(path, 'model_structure.png'), show_shapes=True, show_layer_names=True)
 
-
     @property
     def input_dim(self):
         return self._input_dim
-
 
     @property
     def output_dim(self):
         return self._output_dim
 
-
     @property
     def batch_size(self):
         return self._batch_size
+
     
 class TestModel:
     def __init__(self, input_dim, model_path):
